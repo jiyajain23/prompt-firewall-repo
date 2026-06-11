@@ -3,6 +3,8 @@ Layer 2 — Feature Extraction
 396-dim feature vector: 384 MiniLM embeddings + 12 hand-crafted signals.
 Feature names list is the authoritative source for SHAP — length must == 396.
 Exact implementation from v3 notebook Cell 5.
+
+Pattern banks live exclusively in signals.py — do NOT redefine them here.
 """
 
 from __future__ import annotations
@@ -15,6 +17,13 @@ import numpy as np
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from tqdm.auto import tqdm
+
+from .signals import (
+    has_persona_signal,
+    has_override_signal,
+    has_refusal_signal,
+    has_affirmative_signal,
+)
 
 EMB_DIM          = 384
 N_HAND_CRAFTED   = 12
@@ -45,18 +54,10 @@ assert len(FEATURE_NAMES) == TOTAL_FEATURES, (
 )
 
 
-# ── Pattern banks ─────────────────────────────────────────────────────────────
-_PERSONA_PATS    = [r'\bdan\b', r'evil\s*gpt', r'you are now', r'act as',
-                    r'pretend (to be|you are)']
-_OVERRIDE_PATS   = [r'system.{0,10}override', r'developer mode',
-                    r'jailbreak', r'no restriction']
-_REFUSAL_PATS    = [r"don'?t refus", r'you must comply',
-                    r'you (have to|are required to)', r'do not say no']
-_AFF_PATS        = [r'\bsay yes\b', r'\bagree\b',
-                    r'you (will|shall|must) answer',
-                    r'(start|begin) (your|the) response with']
-_MT_PATTERN      = re.compile(r'\[(user|human|assistant)\]:', re.I)
-_LEET_CHARS      = set('@31!0$5')
+# ── Local-only helpers (not pattern-related) ──────────────────────────────────
+# Pattern banks live in signals.py; imported above as has_* functions.
+_MT_PATTERN = re.compile(r'\[(user|human|assistant)\]:', re.I)
+_LEET_CHARS = set('@31!0$5')
 
 
 def _shannon_entropy(text: str) -> float:
@@ -75,20 +76,20 @@ def _hand_crafted(text: str) -> np.ndarray:
     lower = text.lower()
     words = text.split()
 
-    b64   = re.findall(r'[A-Za-z0-9+/]{16,}', text)
+    b64   = re.findall(r'\b[A-Za-z0-9+/]{40,}={0,2}\b', text)
     return np.array([
         float(len(text)),
         float(len(words)),
         float(sum(len(w) for w in words) / max(len(words), 1)),
         1.0 if b64 else 0.0,
-        1.0 if any(re.search(p, lower) for p in _PERSONA_PATS)  else 0.0,
-        1.0 if any(re.search(p, lower) for p in _OVERRIDE_PATS) else 0.0,
-        1.0 if any(re.search(p, lower) for p in _REFUSAL_PATS)  else 0.0,
+        float(has_persona_signal(text)),
+        float(has_override_signal(text)),
+        float(has_refusal_signal(text)),
         sum(1 for c in text if c in _LEET_CHARS) / max(len(text), 1),
         sum(1 for c in text if ord(c) > 127)     / max(len(text), 1),
         _shannon_entropy(text),
         1.0 if _MT_PATTERN.search(lower) else 0.0,
-        1.0 if any(re.search(p, lower) for p in _AFF_PATS) else 0.0,
+        float(has_affirmative_signal(text)),
     ], dtype=np.float32)
 
 

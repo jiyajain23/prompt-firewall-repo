@@ -1,9 +1,15 @@
 """
-Layer 1 signal engine.
+Layer 1 signal engine  ·  single source of truth for all regex pattern banks.
 
-This module is the single production owner for regex hard-block/soft-risk policy
-and the FAISS zero-day index. The notebook imports this module so policy changes
-can be made in the repository instead of inside notebook cells.
+This module owns:
+  - HARD_BLACKLIST / PAYLOAD_PATTERNS  → hard-block layer
+  - SOFT_RISK_PATTERNS                 → soft-risk layer
+  - PERSONA_PATTERNS / OVERRIDE_PATTERNS
+    REFUSAL_PATTERNS / AFFIRMATIVE_PATTERNS  → XGBoost feature flags
+
+All layers (hard-block, feature engineering) import has_* helpers from here.
+The notebook also imports this module so policy changes propagate everywhere
+without touching notebook cells.
 """
 
 from __future__ import annotations
@@ -25,8 +31,9 @@ HARD_BLACKLIST: List[str] = [
     r"system\s+(prompt\s+)?override",
     r"developer mode",
     r"\b(developer|jailbreak|god|dan|evil\s*gpt)\s+mode\b",
-    r"\bdo anything now\b",
-    r"\bdan\b",
+    r"\bdo anything now\b"
+    r"\byou are dan\b"
+    r"\bdan mode\b"
     r"\bevil\s*gpt\b",
     r"you are now in .*mode",
     r"as an ai with no restrictions",
@@ -36,8 +43,6 @@ HARD_BLACKLIST: List[str] = [
     r"\b(bypass|override)\s+(safety|security|filter|guardrail|system\s+prompt)\b",
     r"master password .*override",
     r"\bsigma\b.*(override|safety|training)",
-    r"do not refuse",
-    r"you must comply",
     r"must comply with my next request",
     r"start your response with ['\"]?sure",
     r"synthesi[sz]e .*fentanyl",
@@ -63,6 +68,8 @@ SOFT_RISK_PATTERNS: List[str] = [
     r"since you already",
     r"hypothetically.*bypass",
     r"fictional.*exact commands",
+    r"do not refuse",
+    r"you must comply",
 ]
 
 PAYLOAD_PATTERNS: List[str] = [
@@ -72,8 +79,68 @@ PAYLOAD_PATTERNS: List[str] = [
 ]
 
 
+# ── XGBoost / feature-layer pattern banks ─────────────────────────────────────
+# These are consumed by features.py via has_* helpers below.
+# Do NOT duplicate them in features.py.
+
+PERSONA_PATTERNS: List[str] = [
+    r"\bdan\b",
+    r"evil\s*gpt",
+    r"you are now",
+    r"act as",
+    r"pretend (to be|you are)",
+]
+
+OVERRIDE_PATTERNS: List[str] = [
+    r"system.{0,10}override",
+    r"developer mode",
+    r"jailbreak",
+    r"no restriction",
+]
+
+REFUSAL_PATTERNS: List[str] = [
+    r"don'?t refus",
+    r"you must comply",
+    r"you (have to|are required to)",
+    r"do not say no",
+]
+
+AFFIRMATIVE_PATTERNS: List[str] = [
+    r"\bsay yes\b",
+    r"\bagree\b",
+    r"you (will|shall|must) answer",
+    r"(start|begin) (your|the) response with",
+]
+
+
+# ── Low-level helpers ──────────────────────────────────────────────────────────
+
 def regex_hits(prompt: str, patterns: List[str]) -> List[str]:
     return [pat for pat in patterns if re.search(pat, prompt.lower(), flags=re.I | re.S)]
+
+
+def has_persona_signal(text: str) -> bool:
+    """True if the prompt tries to assign an alter-ego persona."""
+    lower = text.lower()
+    return any(re.search(p, lower) for p in PERSONA_PATTERNS)
+
+
+def has_override_signal(text: str) -> bool:
+    """True if the prompt attempts a system/developer override."""
+    lower = text.lower()
+    return any(re.search(p, lower) for p in OVERRIDE_PATTERNS)
+
+
+def has_refusal_signal(text: str) -> bool:
+    """True if the prompt tries to suppress model refusals."""
+    lower = text.lower()
+    return any(re.search(p, lower) for p in REFUSAL_PATTERNS)
+
+
+def has_affirmative_signal(text: str) -> bool:
+    """True if the prompt forces an affirmative/compliant opener."""
+    lower = text.lower()
+    return any(re.search(p, lower) for p in AFFIRMATIVE_PATTERNS)
 
 
 def _decoded_base64_text(prompt: str) -> str:
