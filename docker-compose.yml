@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  firewall:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - FIREWALL_API_KEY=${FIREWALL_API_KEY}
+      - HF_REPO_ID=${HF_REPO_ID}
+      # Set MODEL_DIR to skip HF download and load from a mounted local dir:
+      # - MODEL_DIR=/models
+      - FIREWALL_CONFIG=configs/model_config.yaml
+    volumes:
+      - ./logs:/app/logs
+      # Uncomment to mount local model artefacts instead of downloading from HF:
+      # - ./model_cache:/app/.cache/huggingface
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s   # allow time for HF download on first start

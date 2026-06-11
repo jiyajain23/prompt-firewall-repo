@@ -1,0 +1,57 @@
+# ── Prompt Firewall — Model Configuration ────────────────────────────────────
+# All values match the final trained notebook (v3).
+# Edit here; never hardcode in src/.
+
+model:
+  hf_repo_id: "jiyajain23/prompt-firewall-model"   
+  deberta_subdir: "deberta_best"
+  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
+  transformer_model: "microsoft/deberta-v3-base"
+  transformer_max_len: 256
+
+artifacts:
+  xgb_model: "xgb_model.json"
+  scaler: "scaler.pkl"
+  xgb_threshold: "xgb_threshold.pkl"
+  ensemble_config: "ensemble_config.pkl"
+  faiss_index: "zeroday.faiss"
+  faiss_meta: "zeroday_meta.pkl"
+  shap_explainer: "shap_explainer.pkl"
+  taxonomy_clf: "taxonomy_clf.pkl"
+  taxonomy_le: "taxonomy_le.pkl"
+
+ensemble:
+  w_xgb: 0.40
+  w_transformer: 0.60
+  w_faiss: 0.20
+  threshold: 0.50              # calibrated on val set
+  xgb_threshold: 0.79          # calibrated XGB-only threshold
+  xgb_fast_high: 0.92          # skip transformer above this
+  xgb_fast_low: 0.08           # skip transformer below this
+
+faiss:
+  sim_threshold: 0.82          # hard match
+  soft_threshold: 0.70         # soft match (score * 0.5 bonus)
+
+features:
+  emb_dim: 384
+  n_hand_crafted: 12           # must match extract_features() exactly
+  total_dim: 396
+
+session:
+  max_turns: 20
+  window_size: 3
+  window_stride: 1
+  window_max_chars: 512
+  escalation_window: 5
+  escalation_threshold: 0.25
+  persistence_min_hits: 2
+  cascade_certain_high: 0.82
+  cascade_certain_low: 0.12
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 2
+  max_prompt_len: 32000
+  rate_limit_per_minute: 120

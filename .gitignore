@@ -1,0 +1,34 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache and bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local model cache and artifacts (do not upload large models to Git)
+model_cache/
+*.faiss
+*_meta.pkl
+*.xgb
+*.pkl
+
+# Local runtime logs and environment config
+logs/
+*.log
+*.jsonl
+.env
+
+# IDEs and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
