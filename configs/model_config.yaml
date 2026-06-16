@@ -8,6 +8,7 @@ model:
   embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
   transformer_model: "microsoft/deberta-v3-base"
   transformer_max_len: 256
+  hf_revision: null            # Pinned Git commit SHA / revision for HuggingFace downloads (null = use latest)
 
 artifacts:
   xgb_model: "xgb_model.json"
@@ -55,3 +56,5 @@ api:
   workers: 2
   max_prompt_len: 32000
   rate_limit_per_minute: 120
+  require_api_key: false       # Force authentication failure if FIREWALL_API_KEY is empty in prod
+  redis_url: ""                # Redis connection URL for distributed rate limiting (empty = fallback to in-memory)

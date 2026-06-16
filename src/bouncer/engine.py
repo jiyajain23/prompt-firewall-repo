@@ -63,8 +63,10 @@ class BouncerEngine:
     @classmethod
     def from_hf(cls, repo_id: str, cfg: dict, cache_dir: str = "./model_cache") -> "BouncerEngine":
         """Download all artefacts from HuggingFace Hub and initialise."""
-        print(f"📦 Downloading artefacts from {repo_id} ...")
-        local_dir = snapshot_download(repo_id=repo_id, cache_dir=cache_dir)
+        # Read the pinned HF model repository Git revision/commit from configuration
+        revision = cfg.get("model", {}).get("hf_revision")
+        print(f"📦 Downloading artefacts from {repo_id} (revision: {revision or 'latest'}) ...")
+        local_dir = snapshot_download(repo_id=repo_id, revision=revision, cache_dir=cache_dir)
         return cls.from_local(local_dir, cfg)
 
     @classmethod

@@ -9,8 +9,7 @@ Endpoints:
   GET  /health                         health + model info
 """
 
-from __future__ import annotations
-
+from contextlib import asynccontextmanager
 import os
 import time
 import uuid
@@ -34,50 +33,91 @@ from .schemas import (
     SessionSummaryResponse,
 )
 
-# ── Load config ────────────────────────────────────────────────────────────────
-_CFG_PATH = os.environ.get("FIREWALL_CONFIG", "configs/model_config.yaml")
-with open(_CFG_PATH) as f:
-    CFG = yaml.safe_load(f)
-
-API_KEY    = os.environ.get("FIREWALL_API_KEY", "")
-HF_REPO    = os.environ.get("HF_REPO_ID", CFG["model"]["hf_repo_id"])
-MODEL_DIR  = os.environ.get("MODEL_DIR", "")      # if set, load from local dir instead of HF
-RATE_LIMIT = CFG["api"]["rate_limit_per_minute"]
-
-# ── Load models (once, at startup) ────────────────────────────────────────────
-if MODEL_DIR:
-    engine = BouncerEngine.from_local(MODEL_DIR, CFG)
-else:
-    engine = BouncerEngine.from_hf(HF_REPO, CFG)
-
-cascade   = CascadeBouncer(
-    engine,
-    certain_high      = CFG["session"]["cascade_certain_high"],
-    certain_low       = CFG["session"]["cascade_certain_low"],
-    window_size       = CFG["session"]["window_size"],
-    window_stride     = CFG["session"]["window_stride"],
-    window_max_chars  = CFG["session"]["window_max_chars"],
-    ens_threshold     = CFG["ensemble"]["threshold"],
-)
 logger = AuditLogger()
 
-# ── Rate limiting (in-memory, per IP) ─────────────────────────────────────────
-_rate_buckets: Dict[str, list] = defaultdict(list)
 
-def _check_rate_limit(client_ip: str) -> None:
-    now    = time.time()
-    bucket = _rate_buckets[client_ip]
-    # Drop timestamps older than 60s
-    _rate_buckets[client_ip] = [t for t in bucket if now - t < 60]
-    if len(_rate_buckets[client_ip]) >= RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    _rate_buckets[client_ip].append(now)
+# ── Lifespan Configuration & Startup ──────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 1. Load configuration
+    cfg_path = os.environ.get("FIREWALL_CONFIG", "configs/model_config.yaml")
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f)
+    
+    app.state.cfg = cfg
+
+    # 2. Configure authentication
+    api_key = os.environ.get("FIREWALL_API_KEY", "")
+    require_api_key = os.environ.get(
+        "REQUIRE_API_KEY",
+        str(cfg.get("api", {}).get("require_api_key", False))
+    ).lower() in ("true", "1", "yes")
+
+    # Fail startup in production if require_api_key is enabled but key is empty
+    if require_api_key and not api_key:
+        raise ValueError(
+            "CRITICAL: FIREWALL_API_KEY environment variable is missing or empty, "
+            "but require_api_key is enabled."
+        )
+
+    app.state.api_key = api_key
+    app.state.require_api_key = require_api_key
+    app.state.rate_limit = cfg["api"]["rate_limit_per_minute"]
+
+    # 3. Load ML models and engines (skip if testing to support fast unit tests)
+    if os.environ.get("TESTING") == "1":
+        app.state.engine = None
+        app.state.cascade = None
+    else:
+        model_dir = os.environ.get("MODEL_DIR", "")
+        if model_dir:
+            engine = BouncerEngine.from_local(model_dir, cfg)
+        else:
+            hf_repo = os.environ.get("HF_REPO_ID", cfg["model"]["hf_repo_id"])
+            engine = BouncerEngine.from_hf(hf_repo, cfg)
+
+        cascade = CascadeBouncer(
+            engine,
+            certain_high      = cfg["session"]["cascade_certain_high"],
+            certain_low       = cfg["session"]["cascade_certain_low"],
+            window_size       = cfg["session"]["window_size"],
+            window_stride     = cfg["session"]["window_stride"],
+            window_max_chars  = cfg["session"]["window_max_chars"],
+            ens_threshold     = cfg["ensemble"]["threshold"],
+        )
+        app.state.engine = engine
+        app.state.cascade = cascade
+
+    # 4. Initialize rate limiter backend (Redis or in-memory)
+    redis_url = os.environ.get("REDIS_URL", cfg.get("api", {}).get("redis_url", ""))
+    app.state.redis_url = redis_url
+    if redis_url:
+        try:
+            import redis
+            app.state.redis_client = redis.from_url(redis_url, decode_responses=True)
+        except ImportError:
+            raise ValueError(
+                "REDIS_URL is configured, but the 'redis' package is not installed. "
+                "Please run 'pip install redis' to use Redis rate limiting."
+            )
+    else:
+        app.state.redis_client = None
+        app.state.rate_buckets = defaultdict(list)
+        app.state.last_cleanup_time = time.time()
+
+    yield
+
+    # Clean up resources
+    if getattr(app.state, "redis_client", None):
+        app.state.redis_client.close()
+
 
 # ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Prompt Firewall",
     description="Adversarial prompt detection — XGBoost + DeBERTa ensemble",
     version="3.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -88,9 +128,62 @@ app.add_middleware(
 )
 
 
-def _auth(x_api_key: str) -> None:
-    if API_KEY and x_api_key != API_KEY:
+def _auth(request: Request, x_api_key: str) -> None:
+    api_key = getattr(request.app.state, "api_key", "")
+    require_api_key = getattr(request.app.state, "require_api_key", False)
+
+    if require_api_key:
+        if not x_api_key or x_api_key != api_key:
+            raise HTTPException(status_code=401, detail="Invalid API key")
+    elif api_key and x_api_key != api_key:
         raise HTTPException(status_code=401, detail="Invalid API key")
+
+
+def _get_client_ip(request: Request) -> str:
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        return x_forwarded_for.split(",")[0].strip()
+    x_real_ip = request.headers.get("x-real-ip")
+    if x_real_ip:
+        return x_real_ip.strip()
+    return request.client.host if request.client else "127.0.0.1"
+
+
+def _check_rate_limit(request: Request, client_ip: str) -> None:
+    redis_client = getattr(request.app.state, "redis_client", None)
+    rate_limit = getattr(request.app.state, "rate_limit", 120)
+
+    if redis_client:
+        current_minute = int(time.time() / 60)
+        key = f"rate_limit:{client_ip}:{current_minute}"
+        count = redis_client.incr(key)
+        if count == 1:
+            redis_client.expire(key, 60)
+        if count > rate_limit:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    else:
+        now = time.time()
+        buckets = request.app.state.rate_buckets
+
+        # Periodic cleanup of all inactive buckets (once every 60 seconds)
+        last_cleanup = getattr(request.app.state, "last_cleanup_time", 0.0)
+        if now - last_cleanup > 60.0:
+            request.app.state.last_cleanup_time = now
+            for ip in list(buckets.keys()):
+                pruned = [t for t in buckets[ip] if now - t < 60]
+                if not pruned:
+                    del buckets[ip]
+                else:
+                    buckets[ip] = pruned
+
+        bucket = buckets[client_ip]
+        pruned_bucket = [t for t in bucket if now - t < 60]
+        if len(pruned_bucket) >= rate_limit:
+            buckets[client_ip] = pruned_bucket
+            raise HTTPException(status_code=429, detail="Rate limit exceeded")
+        
+        pruned_bucket.append(now)
+        buckets[client_ip] = pruned_bucket
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -101,8 +194,13 @@ async def classify(
     request:     Request,
     x_api_key:   str = Header(default=""),
 ):
-    _auth(x_api_key)
-    _check_rate_limit(request.client.host)
+    _auth(request, x_api_key)
+    client_ip = _get_client_ip(request)
+    _check_rate_limit(request, client_ip)
+
+    engine = request.app.state.engine
+    if engine is None:
+        raise HTTPException(status_code=503, detail="Model engine not initialized")
 
     result     = engine.classify(req.prompt, include_shap=req.include_shap)
     request_id = str(uuid.uuid4())
@@ -121,8 +219,13 @@ async def session_classify(
     request:     Request,
     x_api_key:   str = Header(default=""),
 ):
-    _auth(x_api_key)
-    _check_rate_limit(request.client.host)
+    _auth(request, x_api_key)
+    client_ip = _get_client_ip(request)
+    _check_rate_limit(request, client_ip)
+
+    cascade = request.app.state.cascade
+    if cascade is None:
+        raise HTTPException(status_code=503, detail="Cascade bouncer not initialized")
 
     result     = cascade.score_turn(session_id, req.content, req.role)
     request_id = str(uuid.uuid4())
@@ -140,29 +243,39 @@ async def session_classify(
 )
 async def session_summary(
     session_id: str,
+    request:    Request,
     x_api_key:  str = Header(default=""),
 ):
-    _auth(x_api_key)
+    _auth(request, x_api_key)
+    cascade = request.app.state.cascade
+    if cascade is None:
+        raise HTTPException(status_code=503, detail="Cascade bouncer not initialized")
     return SessionSummaryResponse(**cascade.summary(session_id))
 
 
 @app.delete("/v1/session/{session_id}")
 async def session_clear(
     session_id: str,
+    request:    Request,
     x_api_key:  str = Header(default=""),
 ):
-    _auth(x_api_key)
+    _auth(request, x_api_key)
+    cascade = request.app.state.cascade
+    if cascade is None:
+        raise HTTPException(status_code=503, detail="Cascade bouncer not initialized")
     cascade.clear(session_id)
     return {"cleared": session_id}
 
 
 @app.get("/health", response_model=HealthResponse)
-async def health():
+async def health(request: Request):
+    engine = request.app.state.engine
+    cfg = request.app.state.cfg
     return HealthResponse(
         status        = "ok",
-        device        = engine.device,
-        faiss_vectors = engine.zd_index.index.ntotal if engine.zd_index.index else 0,
-        model         = CFG["model"]["transformer_model"],
+        device        = engine.device if engine else "n/a",
+        faiss_vectors = engine.zd_index.index.ntotal if (engine and engine.zd_index and engine.zd_index.index) else 0,
+        model         = cfg["model"]["transformer_model"] if cfg else "n/a",
     )
 
 
