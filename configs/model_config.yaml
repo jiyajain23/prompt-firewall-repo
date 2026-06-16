@@ -58,3 +58,4 @@ api:
   rate_limit_per_minute: 120
   require_api_key: false       # Force authentication failure if FIREWALL_API_KEY is empty in prod
   redis_url: ""                # Redis connection URL for distributed rate limiting (empty = fallback to in-memory)
+  cors_origins: "*"            # Allowed CORS origins, comma-separated (overridden by CORS_ORIGINS env var)

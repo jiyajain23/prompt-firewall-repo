@@ -120,11 +120,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS configuration (restrict to required methods/headers, configurable origins via environment variable)
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "*").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=CORS_ORIGINS,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "x-api-key"],
 )
 
 

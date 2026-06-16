@@ -146,3 +146,27 @@ def test_rate_limiting_cleanup_prevents_leak():
         assert "2.2.2.2" not in buckets
         assert "3.3.3.3" in buckets
 
+def test_cors_restrictions():
+    with TestClient(app) as client:
+        # 1. Check preflight OPTIONS request with valid method and headers
+        headers = {
+            "Origin": "http://example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-api-key, content-type",
+        }
+        response = client.options("/v1/classify", headers=headers)
+        assert response.status_code == 200
+        assert response.headers.get("access-control-allow-origin") == "http://example.com"
+        assert "POST" in response.headers.get("access-control-allow-methods", "")
+        assert "x-api-key" in response.headers.get("access-control-allow-headers", "").lower()
+        assert "content-type" in response.headers.get("access-control-allow-headers", "").lower()
+        
+        # 2. Check preflight OPTIONS with a disallowed method (PUT)
+        headers_disallowed_method = {
+            "Origin": "http://example.com",
+            "Access-Control-Request-Method": "PUT",
+        }
+        response_disallowed = client.options("/v1/classify", headers=headers_disallowed_method)
+        assert "PUT" not in response_disallowed.headers.get("access-control-allow-methods", "")
+
+
