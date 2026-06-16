@@ -11,6 +11,7 @@ Endpoints:
 
 from contextlib import asynccontextmanager
 import os
+import secrets
 import time
 import uuid
 from collections import defaultdict
@@ -139,10 +140,13 @@ def _auth(request: Request, x_api_key: str) -> None:
     api_key = getattr(request.app.state, "api_key", "")
     require_api_key = getattr(request.app.state, "require_api_key", False)
 
+    # Use secrets.compare_digest to prevent timing-attack information leaks
+    is_valid = secrets.compare_digest(x_api_key, api_key)
+
     if require_api_key:
-        if not x_api_key or x_api_key != api_key:
+        if not x_api_key or not is_valid:
             raise HTTPException(status_code=401, detail="Invalid API key")
-    elif api_key and x_api_key != api_key:
+    elif api_key and not is_valid:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
 
