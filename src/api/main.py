@@ -292,7 +292,20 @@ async def health(request: Request):
 
 @app.exception_handler(Exception)
 async def _global_error(request: Request, exc: Exception):
+    request_id = str(uuid.uuid4())
+
+    logger.log(
+        request_id,
+        {
+            "error": str(exc),
+            "error_type": type(exc).__name__,
+        },
+    )
+
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc), "type": type(exc).__name__},
+        content={
+            "detail": "Internal server error",
+            "request_id": request_id,
+        },
     )
