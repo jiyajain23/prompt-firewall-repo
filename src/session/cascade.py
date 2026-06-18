@@ -152,7 +152,7 @@ class CascadeBouncer:
             window_strings = conversation_to_windows(
                 latest_turns,
                 window_size=self.window_size,
-                stride=self.window_size,   # single window, no overlap needed here
+                stride=self.window_stride,   # single window, no overlap needed here
                 max_chars=self.window_max_chars,
             )
             if window_strings:

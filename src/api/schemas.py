@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class ClassifyRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=32_000)
-    include_shap: bool = True
+    include_shap: bool = False
 
 
 class SessionClassifyRequest(BaseModel):
