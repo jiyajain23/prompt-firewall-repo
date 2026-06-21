@@ -221,5 +221,68 @@ def test_public_mode_defense(monkeypatch):
         # Verify that include_shap was forced to False when calling the engine
         mock_engine.classify.assert_called_once_with("hello world", include_shap=False)
 
+def test_session_id_validation():
+    with TestClient(app) as client:
+        # Invalid characters (asterisk) -> 422
+        response = client.post("/v1/session/invalid*id/classify", json={"content": "hello"})
+        assert response.status_code == 422
+        
+        # Too long ID (>64 characters) -> 422
+        long_id = "a" * 65
+        response = client.post(f"/v1/session/{long_id}/classify", json={"content": "hello"})
+        assert response.status_code == 422
+        
+        # Valid ID -> 503 (auth passed, fails at engine setup since mock not configured)
+        response = client.post("/v1/session/valid-id_123.ABC/classify", json={"content": "hello"})
+        assert response.status_code == 503
+
+def test_session_not_found():
+    with TestClient(app) as client:
+        # Mock cascade and assign it to state to avoid 503 Service Unavailable
+        mock_cascade = MagicMock()
+        mock_cascade._sessions = {}
+        client.app.state.cascade = mock_cascade
+        
+        # Querying non-existent session summary -> 404
+        response = client.get("/v1/session/non-existent-session/summary")
+        assert response.status_code == 404
+        
+        # Deleting non-existent session -> 404
+        response = client.delete("/v1/session/non-existent-session")
+        assert response.status_code == 404
+
+def test_session_eviction_lru():
+    from src.session.cascade import CascadeBouncer
+    
+    # Create CascadeBouncer with low max limit (e.g. set capacity limit to 3)
+    cascade = CascadeBouncer(engine=MagicMock())
+    cascade.max_sessions = 3
+    
+    # Populate the sessions
+    cascade._get("session-1")
+    cascade._get("session-2")
+    cascade._get("session-3")
+    
+    # Verify they exist
+    assert "session-1" in cascade._sessions
+    assert "session-2" in cascade._sessions
+    assert "session-3" in cascade._sessions
+    
+    # Touch session-1 to update last_accessed timestamp (making session-2 oldest)
+    # To ensure time difference, we can sleep briefly or modify timestamps directly, 
+    # but a simple sleep is quick, or we can manually set timestamps to be deterministic:
+    cascade._sessions["session-1"].last_accessed = time.time() + 10.0
+    cascade._sessions["session-2"].last_accessed = time.time() - 10.0
+    cascade._sessions["session-3"].last_accessed = time.time()
+    
+    # Adding session-4 should trigger eviction of session-2 (the oldest)
+    cascade._get("session-4")
+    
+    assert "session-2" not in cascade._sessions
+    assert "session-4" in cascade._sessions
+    assert "session-1" in cascade._sessions
+    assert "session-3" in cascade._sessions
+
+
 
 

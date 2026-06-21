@@ -61,6 +61,7 @@ class CascadeBouncer:
         self.window_max_chars = window_max_chars
         self.ens_threshold    = ens_threshold
         self._sessions: Dict[str, CascadeSessionState] = {}
+        self.max_sessions     = 5000
 
     # ── Session management ─────────────────────────────────────────────────────
 
@@ -72,8 +73,8 @@ class CascadeBouncer:
             self._sessions.pop(sid, None)
 
         if session_id not in self._sessions:
-            # 2. Limit maximum active sessions to 5,000 to prevent Memory DoS (evict oldest LRU)
-            if len(self._sessions) >= 5000:
+            # 2. Limit maximum active sessions to prevent Memory DoS (evict oldest LRU)
+            if len(self._sessions) >= self.max_sessions:
                 oldest_sid = min(self._sessions.keys(), key=lambda k: self._sessions[k].last_accessed)
                 self._sessions.pop(oldest_sid, None)
             self._sessions[session_id] = CascadeSessionState(session_id=session_id, last_accessed=now)

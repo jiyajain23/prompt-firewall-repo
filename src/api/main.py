@@ -241,9 +241,9 @@ async def classify(
 
 @app.post("/v1/session/{session_id}/classify")
 async def session_classify(
-    session_id:  str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     req:         SessionClassifyRequest,
     request:     Request,
+    session_id:  str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     x_api_key:   str = Header(default=""),
 ):
     _auth(request, x_api_key)
@@ -280,8 +280,8 @@ async def session_classify(
     response_model=SessionSummaryResponse,
 )
 async def session_summary(
-    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     request:    Request,
+    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     x_api_key:  str = Header(default=""),
 ):
     _auth(request, x_api_key)
@@ -297,8 +297,8 @@ async def session_summary(
 
 @app.delete("/v1/session/{session_id}")
 async def session_clear(
-    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     request:    Request,
+    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     x_api_key:  str = Header(default=""),
 ):
     _auth(request, x_api_key)
