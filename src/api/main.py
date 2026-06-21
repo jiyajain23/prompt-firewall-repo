@@ -18,7 +18,7 @@ from collections import defaultdict
 from typing import Dict
 
 import yaml
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Path
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -32,6 +32,8 @@ from .schemas import (
     SessionClassifyRequest,
     SessionClassifyResponse,
     SessionSummaryResponse,
+    PublicClassifyResponse,
+    PublicSessionClassifyResponse,
 )
 
 logger = AuditLogger()
@@ -64,6 +66,10 @@ async def lifespan(app: FastAPI):
     app.state.api_key = api_key
     app.state.require_api_key = require_api_key
     app.state.rate_limit = cfg["api"]["rate_limit_per_minute"]
+    app.state.public_mode = os.environ.get(
+        "PUBLIC_MODE",
+        str(cfg.get("api", {}).get("public_mode", False))
+    ).lower() in ("true", "1", "yes")
 
     # 3. Load ML models and engines (skip if testing to support fast unit tests)
     if os.environ.get("TESTING") == "1":
@@ -199,7 +205,7 @@ def _check_rate_limit(request: Request, client_ip: str) -> None:
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
-@app.post("/v1/classify", response_model=ClassifyResponse)
+@app.post("/v1/classify")
 async def classify(
     req:         ClassifyRequest,
     request:     Request,
@@ -213,19 +219,29 @@ async def classify(
     if engine is None:
         raise HTTPException(status_code=503, detail="Model engine not initialized")
 
-    result     = engine.classify(req.prompt, include_shap=req.include_shap)
+    public_mode = getattr(request.app.state, "public_mode", False)
+    include_shap = req.include_shap
+    if public_mode:
+        include_shap = False
+
+    result     = engine.classify(req.prompt, include_shap=include_shap)
     request_id = str(uuid.uuid4())
     logger.log(request_id, result)
+
+    if public_mode:
+        return PublicClassifyResponse(
+            request_id=request_id,
+            verdict=result["verdict"],
+            is_adversarial=result["is_adversarial"],
+            latency_ms=result["latency_ms"],
+        )
 
     return ClassifyResponse(request_id=request_id, **result)
 
 
-@app.post(
-    "/v1/session/{session_id}/classify",
-    response_model=SessionClassifyResponse,
-)
+@app.post("/v1/session/{session_id}/classify")
 async def session_classify(
-    session_id:  str,
+    session_id:  str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     req:         SessionClassifyRequest,
     request:     Request,
     x_api_key:   str = Header(default=""),
@@ -242,6 +258,17 @@ async def session_classify(
     request_id = str(uuid.uuid4())
     logger.log(request_id, result)
 
+    public_mode = getattr(request.app.state, "public_mode", False)
+    if public_mode:
+        return PublicSessionClassifyResponse(
+            request_id=request_id,
+            session_id=session_id,
+            turn=result["turn"],
+            verdict=result["verdict"],
+            is_adversarial=result["is_adversarial"],
+            latency_ms=result["latency_ms"],
+        )
+
     return SessionClassifyResponse(
         request_id=request_id,
         **{k: v for k, v in result.items() if k != "prompt_hash"},
@@ -253,7 +280,7 @@ async def session_classify(
     response_model=SessionSummaryResponse,
 )
 async def session_summary(
-    session_id: str,
+    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     request:    Request,
     x_api_key:  str = Header(default=""),
 ):
@@ -261,12 +288,16 @@ async def session_summary(
     cascade = request.app.state.cascade
     if cascade is None:
         raise HTTPException(status_code=503, detail="Cascade bouncer not initialized")
+    
+    if session_id not in cascade._sessions:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        
     return SessionSummaryResponse(**cascade.summary(session_id))
 
 
 @app.delete("/v1/session/{session_id}")
 async def session_clear(
-    session_id: str,
+    session_id: str = Path(..., min_length=1, max_length=64, pattern="^[a-zA-Z0-9_.-]+$"),
     request:    Request,
     x_api_key:  str = Header(default=""),
 ):
@@ -274,6 +305,10 @@ async def session_clear(
     cascade = request.app.state.cascade
     if cascade is None:
         raise HTTPException(status_code=503, detail="Cascade bouncer not initialized")
+    
+    if session_id not in cascade._sessions:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        
     cascade.clear(session_id)
     return {"cleared": session_id}
 

@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 class ClassifyRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=32_000)
-    include_shap: bool = True
+    include_shap: bool = False
 
 
 class SessionClassifyRequest(BaseModel):
@@ -24,11 +24,11 @@ class ShapFeature(BaseModel):
 
 class FaissResult(BaseModel):
     hit: bool
-    soft_hit: bool
-    similarity: float
-    action: str
-    match: str
-    family: str
+    soft_hit: bool = False
+    similarity: float = 0.0
+    action: str = ""
+    match: str = ""
+    family: str = ""
 
 
 class ClassifyResponse(BaseModel):
@@ -81,3 +81,19 @@ class HealthResponse(BaseModel):
     device: str
     faiss_vectors: int
     model: str
+
+
+class PublicClassifyResponse(BaseModel):
+    request_id: str
+    verdict: str
+    is_adversarial: bool
+    latency_ms: float
+
+
+class PublicSessionClassifyResponse(BaseModel):
+    request_id: str
+    session_id: str
+    turn: int
+    verdict: str
+    is_adversarial: bool
+    latency_ms: float

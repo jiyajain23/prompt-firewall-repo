@@ -34,6 +34,7 @@ class CascadeSessionState:
     flagged_windows: int = 0
     total_turns:     int = 0
     stage2_calls:    int = 0
+    last_accessed:   float = field(default_factory=time.time)
 
 
 class CascadeBouncer:
@@ -64,15 +65,27 @@ class CascadeBouncer:
     # ── Session management ─────────────────────────────────────────────────────
 
     def _get(self, session_id: str) -> CascadeSessionState:
+        now = time.time()
+        # 1. Prune expired sessions (older than 1 hour) to free memory
+        expired = [sid for sid, s in self._sessions.items() if now - s.last_accessed > 3600]
+        for sid in expired:
+            self._sessions.pop(sid, None)
+
         if session_id not in self._sessions:
-            self._sessions[session_id] = CascadeSessionState(session_id=session_id)
+            # 2. Limit maximum active sessions to 5,000 to prevent Memory DoS (evict oldest LRU)
+            if len(self._sessions) >= 5000:
+                oldest_sid = min(self._sessions.keys(), key=lambda k: self._sessions[k].last_accessed)
+                self._sessions.pop(oldest_sid, None)
+            self._sessions[session_id] = CascadeSessionState(session_id=session_id, last_accessed=now)
+        else:
+            self._sessions[session_id].last_accessed = now
         return self._sessions[session_id]
 
     def clear(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
     def summary(self, session_id: str) -> Dict:
-        state = self._get(session_id)
+        state = self._sessions[session_id]
         return {
             "session_id":     session_id,
             "total_turns":    state.total_turns,

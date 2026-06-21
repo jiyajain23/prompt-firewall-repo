@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 # Force testing mode so models/engines are skipped at startup
 os.environ["TESTING"] = "1"
 os.environ["FIREWALL_CONFIG"] = "configs/model_config.yaml"
+os.environ["CORS_ORIGINS"] = "http://example.com"
 
 from src.api.main import app
 
@@ -136,7 +137,7 @@ def test_rate_limiting_cleanup_prevents_leak():
         client.app.state.last_cleanup_time = time.time() - 100
         
         # Trigger rate limit check on a new IP (3.3.3.3)
-        client.post("/v1/classify", json={"prompt": "hello"})
+        client.post("/v1/classify", headers={"x-forwarded-for": "3.3.3.3"}, json={"prompt": "hello"})
         
         # Verify that the sweep occurred:
         # - "1.1.1.1" should still exist because it was active
@@ -168,5 +169,57 @@ def test_cors_restrictions():
         }
         response_disallowed = client.options("/v1/classify", headers=headers_disallowed_method)
         assert "PUT" not in response_disallowed.headers.get("access-control-allow-methods", "")
+
+def test_include_shap_default():
+    from src.api.schemas import ClassifyRequest
+    req = ClassifyRequest(prompt="hello")
+    # Verify that include_shap defaults to False to save calculation costs
+    assert req.include_shap is False
+
+def test_public_mode_defense(monkeypatch):
+    # Set public mode to True
+    monkeypatch.setenv("PUBLIC_MODE", "true")
+    
+    with TestClient(app) as client:
+        # Mock engine and store in state
+        mock_engine = MagicMock()
+        mock_engine.classify.return_value = {
+            "verdict": "SAFE",
+            "is_adversarial": False,
+            "ensemble_score": 0.1,
+            "xgb_score": 0.1,
+            "transformer_score": 0.1,
+            "faiss": {"hit": False, "soft_hit": False, "similarity": 0.0, "action": "none", "match": "", "family": ""},
+            "top_families": [],
+            "signals": ["internal-signal"],
+            "shap_top5": [],
+            "latency_ms": 1.5,
+            "prompt_hash": "123456"
+        }
+        client.app.state.engine = mock_engine
+        
+        response = client.post("/v1/classify", json={"prompt": "hello world", "include_shap": True})
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify that only public keys are returned
+        assert "request_id" in data
+        assert "verdict" in data
+        assert "is_adversarial" in data
+        assert "latency_ms" in data
+        
+        # Verify that internal/private keys are NOT returned
+        assert "ensemble_score" not in data
+        assert "xgb_score" not in data
+        assert "transformer_score" not in data
+        assert "faiss" not in data
+        assert "top_families" not in data
+        assert "signals" not in data
+        assert "shap_top5" not in data
+        assert "prompt_hash" not in data
+        
+        # Verify that include_shap was forced to False when calling the engine
+        mock_engine.classify.assert_called_once_with("hello world", include_shap=False)
+
 
 
