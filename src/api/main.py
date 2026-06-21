@@ -77,16 +77,28 @@ async def lifespan(app: FastAPI):
             hf_repo = os.environ.get("HF_REPO_ID", cfg["model"]["hf_repo_id"])
             engine = BouncerEngine.from_hf(hf_repo, cfg)
 
+        # BUG-6 FIX: propagate context_window_turns from config into engine.
+        engine.context_window_turns = cfg["session"].get("context_window_turns", 5)
+
         cascade = CascadeBouncer(
             engine,
-            certain_high      = cfg["session"]["cascade_certain_high"],
-            certain_low       = cfg["session"]["cascade_certain_low"],
-            window_size       = cfg["session"]["window_size"],
-            window_stride     = cfg["session"]["window_stride"],
-            window_max_chars  = cfg["session"]["window_max_chars"],
-            ens_threshold     = cfg["ensemble"]["threshold"],
+            certain_high          = cfg["session"]["cascade_certain_high"],
+            certain_low           = cfg["session"]["cascade_certain_low"],
+            window_size           = cfg["session"]["window_size"],
+            window_stride         = cfg["session"]["window_stride"],
+            window_max_chars      = cfg["session"]["window_max_chars"],
+            ens_threshold         = cfg["ensemble"]["threshold"],
+            # ── Cell 10 escalation knobs (BUG-1/2 FIX) ──────────────────
+            escalation_window     = cfg["session"]["escalation_window"],
+            escalation_threshold  = cfg["session"]["escalation_threshold"],
+            escalation_peak_floor = cfg["session"]["escalation_peak_floor"],
+            escalation_boost      = cfg["session"]["escalation_boost"],
+            # ── Cell 10 persistence knobs (BUG-6 FIX) ───────────────────
+            persistence_min_hits  = cfg["session"]["persistence_min_hits"],
+            persistence_window    = cfg["session"]["persistence_window"],
+            persistence_boost     = cfg["session"]["persistence_boost"],
         )
-        app.state.engine = engine
+        app.state.engine  = engine
         app.state.cascade = cascade
 
     # 4. Initialize rate limiter backend (Redis or in-memory)
@@ -113,7 +125,6 @@ async def lifespan(app: FastAPI):
         app.state.redis_client.close()
 
 
-# ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Prompt Firewall",
     description="Adversarial prompt detection — XGBoost + DeBERTa ensemble",
@@ -213,7 +224,7 @@ async def classify(
     if engine is None:
         raise HTTPException(status_code=503, detail="Model engine not initialized")
 
-    result     = engine.classify(req.prompt, include_shap=req.include_shap)
+    result     = engine.classify(req.prompt)
     request_id = str(uuid.uuid4())
     logger.log(request_id, result)
 
