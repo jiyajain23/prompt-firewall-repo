@@ -7,6 +7,7 @@ WORKDIR /app
 # System deps for faiss + torch
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python deps first (layer cache)
@@ -23,8 +24,9 @@ RUN chown -R firewall:firewall /app
 USER firewall
 
 # Model cache dir (HF downloads here at first startup)
+# Model cache dir (HF downloads here at first startup)
 ENV HF_HOME=/app/.cache/huggingface
-RUN mkdir -p $HF_HOME
+RUN mkdir -p /app/logs $HF_HOME
 
 EXPOSE 8000
 

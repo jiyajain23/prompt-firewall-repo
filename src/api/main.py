@@ -85,7 +85,10 @@ async def lifespan(app: FastAPI):
             window_stride     = cfg["session"]["window_stride"],
             window_max_chars  = cfg["session"]["window_max_chars"],
             ens_threshold     = cfg["ensemble"]["threshold"],
+            ttl_seconds       = cfg["session"]["ttl_seconds"],
+            max_sessions      = cfg["session"]["max_sessions"],
         )
+
         app.state.engine = engine
         app.state.cascade = cascade
 

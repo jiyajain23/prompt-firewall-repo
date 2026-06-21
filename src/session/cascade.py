@@ -26,14 +26,18 @@ from ..bouncer.windows import conversation_to_windows
 
 @dataclass
 class CascadeSessionState:
-    session_id:      str
-    turns:           deque  = field(default_factory=lambda: deque(maxlen=20))
-    turn_scores:     List[float] = field(default_factory=list)
-    window_scores:   List[float] = field(default_factory=list)
-    flagged_turns:   int = 0
+    session_id: str
+    created_at: float = field(default_factory=time.time)
+    last_seen: float = field(default_factory=time.time)
+
+    turns: deque = field(default_factory=lambda: deque(maxlen=20))
+    turn_scores: List[float] = field(default_factory=list)
+    window_scores: List[float] = field(default_factory=list)
+
+    flagged_turns: int = 0
     flagged_windows: int = 0
-    total_turns:     int = 0
-    stage2_calls:    int = 0
+    total_turns: int = 0
+    stage2_calls: int = 0
 
 
 class CascadeBouncer:
@@ -51,6 +55,8 @@ class CascadeBouncer:
         window_stride: int  = 1,
         window_max_chars: int = 512,
         ens_threshold: float = 0.50,
+        ttl_seconds: int = 3600,
+        max_sessions: int = 10000,
     ):
         self.engine           = engine
         self.certain_high     = certain_high
@@ -59,31 +65,63 @@ class CascadeBouncer:
         self.window_stride    = window_stride
         self.window_max_chars = window_max_chars
         self.ens_threshold    = ens_threshold
+
+        self.ttl_seconds      = ttl_seconds
+        self.max_sessions     = max_sessions
+
         self._sessions: Dict[str, CascadeSessionState] = {}
 
     # ── Session management ─────────────────────────────────────────────────────
 
     def _get(self, session_id: str) -> CascadeSessionState:
+        self._cleanup_sessions()
+
         if session_id not in self._sessions:
-            self._sessions[session_id] = CascadeSessionState(session_id=session_id)
-        return self._sessions[session_id]
+
+            if len(self._sessions) >= self.max_sessions:
+                oldest = min(
+                    self._sessions.items(),
+                    key=lambda x: x[1].last_seen,
+                )[0]
+
+                self._sessions.pop(oldest, None)
+
+            self._sessions[session_id] = CascadeSessionState(
+                session_id=session_id
+            )
+
+        state = self._sessions[session_id]
+        state.last_seen = time.time()
+
+        return state
 
     def clear(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
 
+    def _cleanup_sessions(self) -> None:
+        now = time.time()
+
+        expired = [
+            sid
+            for sid, state in self._sessions.items()
+            if now - state.last_seen > self.ttl_seconds
+        ]
+
+        for sid in expired:
+            self._sessions.pop(sid, None)
+
     def summary(self, session_id: str) -> Dict:
         state = self._get(session_id)
         return {
-            "session_id":     session_id,
-            "total_turns":    state.total_turns,
-            "flagged_turns":  state.flagged_turns,
+            "session_id": session_id,
+            "total_turns": state.total_turns,
+            "flagged_turns": state.flagged_turns,
             "flagged_windows": state.flagged_windows,
-            "stage2_calls":   state.stage2_calls,
-            "stage2_rate":    state.stage2_calls / max(state.total_turns, 1),
-            "avg_risk":       round(np.mean(state.turn_scores), 4) if state.turn_scores else 0.0,
-            "max_risk":       round(max(state.turn_scores), 4)     if state.turn_scores else 0.0,
+            "stage2_calls": state.stage2_calls,
+            "stage2_rate": state.stage2_calls / max(state.total_turns, 1),
+            "avg_risk": round(np.mean(state.turn_scores), 4) if state.turn_scores else 0.0,
+            "max_risk": round(max(state.turn_scores), 4) if state.turn_scores else 0.0,
         }
-
     # ── Trajectory helpers ─────────────────────────────────────────────────────
 
     def _traj_score(self, state: CascadeSessionState) -> float:
