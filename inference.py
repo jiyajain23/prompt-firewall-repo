@@ -105,6 +105,9 @@ class EndpointHandler:
 
         # ── Batch ─────────────────────────────────────────────────────────────
         if isinstance(inputs, list):
+            if len(inputs) > 32:
+                return {"error": "batch size exceeds limit (32)"}
+
             return [_format_single(self.engine.classify(p)) for p in inputs]
 
         # ── Single-turn ───────────────────────────────────────────────────────

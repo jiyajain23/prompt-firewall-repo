@@ -36,9 +36,9 @@ HARD_BLACKLIST: List[str] = [
     r"system\s+(prompt\s+)?override",
     r"developer mode",
     r"\b(developer|jailbreak|god|dan|evil\s*gpt)\s+mode\b",
-    r"\bdo anything now\b"
-    r"\byou are dan\b"
-    r"\bdan mode\b"
+    r"\bdo anything now\b",
+    r"\byou are dan\b",
+    r"\bdan mode\b",
     r"\bevil\s*gpt\b",
     r"you are now in .*mode",
     r"as an ai with no restrictions",
@@ -188,10 +188,10 @@ def signal_hard_block(prompt: str) -> Tuple[bool, str]:
 
     for pat in HARD_BLACKLIST:
         if re.search(pat, full_scan, flags=re.I | re.S):
-            return True, f"Hard blacklist: `{pat[:50]}`"
+            return True, "Hard policy violation"
     for pat in PAYLOAD_PATTERNS:
         if re.search(pat, full_scan, flags=re.I | re.S):
-            return True, f"Payload pattern: `{pat[:50]}`"
+            return True, "Payload policy violation"
     return False, ""
 
 
