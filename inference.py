@@ -84,21 +84,12 @@ class EndpointHandler:
         from src.session.cascade import CascadeBouncer
         self.cascade = CascadeBouncer(
             self.engine,
-            certain_high          = CFG["session"]["cascade_certain_high"],
-            certain_low           = CFG["session"]["cascade_certain_low"],
-            window_size           = CFG["session"]["window_size"],
-            window_stride         = CFG["session"]["window_stride"],
-            window_max_chars      = CFG["session"]["window_max_chars"],
-            ens_threshold         = CFG["ensemble"]["threshold"],
-            # Cell 10 escalation knobs (BUG-1/2 FIX)
-            escalation_window     = CFG["session"]["escalation_window"],
-            escalation_threshold  = CFG["session"]["escalation_threshold"],
-            escalation_peak_floor = CFG["session"]["escalation_peak_floor"],
-            escalation_boost      = CFG["session"]["escalation_boost"],
-            # Cell 10 persistence knobs (BUG-6 FIX)
-            persistence_min_hits  = CFG["session"]["persistence_min_hits"],
-            persistence_window    = CFG["session"]["persistence_window"],
-            persistence_boost     = CFG["session"]["persistence_boost"],
+            certain_high     = CFG["session"]["cascade_certain_high"],
+            certain_low      = CFG["session"]["cascade_certain_low"],
+            window_size      = CFG["session"]["window_size"],
+            window_stride    = CFG["session"]["window_stride"],
+            window_max_chars = CFG["session"]["window_max_chars"],
+            ens_threshold    = CFG["ensemble"]["threshold"],
         )
 
     def __call__(self, data: Dict[str, Any]) -> Union[Dict, List[Dict]]:
@@ -126,47 +117,36 @@ class EndpointHandler:
 # ── Output formatters ─────────────────────────────────────────────────────────
 
 def _format_single(r: Dict) -> Dict:
-    faiss_r = r.get("faiss_result") or r.get("faiss") or {}
     return {
-        "verdict":           r["verdict"],
-        "is_adversarial":    r["is_adversarial"],
-        "ensemble_score":    r["ensemble_score"],
-        "raw_ensemble_score": r.get("raw_ensemble_score", r["ensemble_score"]),
-        "xgb_score":         r["xgb_score"],
+        "verdict":          r["verdict"],
+        "is_adversarial":   r["is_adversarial"],
+        "ensemble_score":   r["ensemble_score"],
+        "xgb_score":        r["xgb_score"],
         "transformer_score": r["transformer_score"],
-        "transformer_status": r.get("transformer_status", ""),
-        "faiss_hit":         faiss_r.get("hit", False),
-        "faiss_sim":         round(float(faiss_r.get("similarity", 0.0) or 0.0), 3),
-        # TAXONOMY REMOVED: top_family is a stub string, not a ranked list.
-        "top_family":        r.get("top_family", ""),
-        "signals":           r["signals"],
-        # shap_top5 removed — SHAP explainer has been dropped.
-        "latency_ms":        r["latency_ms"],
-        "prompt_hash":       r["prompt_hash"],
+        "faiss_hit":        r["faiss"]["hit"],
+        "faiss_sim":        round(r["faiss"]["similarity"], 3),
+        "top_families":     r["top_families"],
+        "signals":          r["signals"],
+        "shap_top5":        r.get("shap_top5", []),
+        "latency_ms":       r["latency_ms"],
+        "prompt_hash":      r["prompt_hash"],
     }
 
 
 def _format_session(r: Dict) -> Dict:
     return {
-        "session_id":        r["session_id"],
-        "turn":              r["turn"],
-        "verdict":           r["verdict"],
-        "is_adversarial":    r["is_adversarial"],
-        "final_score":       r["final_score"],
-        "single_score":      r["single_score"],
-        "traj_score":        r["traj_score"],
-        "window_score":      r.get("window_score"),
-        "stage":             r["stage"],
-        # Cell 10 BUG-1/2 FIX: escalation fields
-        "escalation":        r.get("escalation", False),
-        "escalation_reason": r.get("escalation_reason"),
-        # Cell 10 BUG-6 FIX: sliding-window persistence fields
-        "persistence":       r.get("persistence", False),
-        "flags_in_window":   r.get("flags_in_window", 0),
-        "signals":           r["signals"],
-        # TAXONOMY stub — str, not a ranked list.
-        "top_family":        r.get("top_family", ""),
-        "latency_ms":        r["latency_ms"],
+        "session_id":     r["session_id"],
+        "turn":           r["turn"],
+        "verdict":        r["verdict"],
+        "is_adversarial": r["is_adversarial"],
+        "final_score":    r["final_score"],
+        "single_score":   r["single_score"],
+        "traj_score":     r["traj_score"],
+        "window_score":   r.get("window_score"),
+        "stage":          r["stage"],
+        "signals":        r["signals"],
+        "top_families":   r.get("top_families", []),
+        "latency_ms":     r["latency_ms"],
     }
 
 
