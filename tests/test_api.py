@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 # Force testing mode so models/engines are skipped at startup
 os.environ["TESTING"] = "1"
 os.environ["FIREWALL_CONFIG"] = "configs/model_config.yaml"
+os.environ["CORS_ORIGINS"] = "http://example.com"
 
 from src.api.main import app
 
@@ -98,7 +99,7 @@ def test_classify_with_mock_engine():
         data = response.json()
         assert data["verdict"] == "SAFE"
         assert data["is_adversarial"] is False
-        mock_engine.classify.assert_called_once_with("hello world", include_shap=False)
+        mock_engine.classify.assert_called_once_with("hello world")
 
 def test_proxy_ip_resolution():
     from src.api.main import _get_client_ip
@@ -136,7 +137,7 @@ def test_rate_limiting_cleanup_prevents_leak():
         client.app.state.last_cleanup_time = time.time() - 100
         
         # Trigger rate limit check on a new IP (3.3.3.3)
-        client.post("/v1/classify", json={"prompt": "hello"})
+        client.post("/v1/classify", headers={"x-forwarded-for": "3.3.3.3"}, json={"prompt": "hello"})
         
         # Verify that the sweep occurred:
         # - "1.1.1.1" should still exist because it was active
@@ -168,5 +169,160 @@ def test_cors_restrictions():
         }
         response_disallowed = client.options("/v1/classify", headers=headers_disallowed_method)
         assert "PUT" not in response_disallowed.headers.get("access-control-allow-methods", "")
+
+def test_include_shap_default():
+    from src.api.schemas import ClassifyRequest
+    req = ClassifyRequest(prompt="hello")
+    # Verify that include_shap defaults to False to save calculation costs
+    assert req.include_shap is False
+
+def test_public_mode_defense(monkeypatch):
+    # Set public mode to True
+    monkeypatch.setenv("PUBLIC_MODE", "true")
+    
+    with TestClient(app) as client:
+        # Mock engine and store in state
+        mock_engine = MagicMock()
+        mock_engine.classify.return_value = {
+            "verdict": "SAFE",
+            "is_adversarial": False,
+            "ensemble_score": 0.1,
+            "xgb_score": 0.1,
+            "transformer_score": 0.1,
+            "faiss": {"hit": False, "soft_hit": False, "similarity": 0.0, "action": "none", "match": "", "family": ""},
+            "top_families": [],
+            "signals": ["internal-signal"],
+            "shap_top5": [],
+            "latency_ms": 1.5,
+            "prompt_hash": "123456"
+        }
+        client.app.state.engine = mock_engine
+        
+        response = client.post("/v1/classify", json={"prompt": "hello world", "include_shap": True})
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify that only public keys are returned
+        assert "request_id" in data
+        assert "verdict" in data
+        assert "is_adversarial" in data
+        assert "latency_ms" in data
+        
+        # Verify that internal/private keys are NOT returned
+        assert "ensemble_score" not in data
+        assert "xgb_score" not in data
+        assert "transformer_score" not in data
+        assert "faiss" not in data
+        assert "top_families" not in data
+        assert "signals" not in data
+        assert "shap_top5" not in data
+        assert "prompt_hash" not in data
+        
+        # Verify that the engine was called with only the prompt
+        mock_engine.classify.assert_called_once_with("hello world")
+
+def test_session_id_validation():
+    with TestClient(app) as client:
+        # Invalid characters (asterisk) -> 422
+        response = client.post("/v1/session/invalid*id/classify", json={"content": "hello"})
+        assert response.status_code == 422
+        
+        # Too long ID (>64 characters) -> 422
+        long_id = "a" * 65
+        response = client.post(f"/v1/session/{long_id}/classify", json={"content": "hello"})
+        assert response.status_code == 422
+        
+        # Valid ID -> 503 (auth passed, fails at engine setup since mock not configured)
+        response = client.post("/v1/session/valid-id_123.ABC/classify", json={"content": "hello"})
+        assert response.status_code == 503
+
+def test_session_not_found():
+    with TestClient(app) as client:
+        # Mock cascade and assign it to state to avoid 503 Service Unavailable
+        mock_cascade = MagicMock()
+        mock_cascade._sessions = {}
+        client.app.state.cascade = mock_cascade
+        
+        # Querying non-existent session summary -> 404
+        response = client.get("/v1/session/non-existent-session/summary")
+        assert response.status_code == 404
+        
+        # Deleting non-existent session -> 404
+        response = client.delete("/v1/session/non-existent-session")
+        assert response.status_code == 404
+
+def test_session_eviction_lru():
+    from src.session.cascade import CascadeBouncer
+    
+    # Create CascadeBouncer with low max limit (e.g. set capacity limit to 3)
+    cascade = CascadeBouncer(engine=MagicMock())
+    cascade.max_sessions = 3
+    
+    # Populate the sessions
+    cascade._get("session-1")
+    cascade._get("session-2")
+    cascade._get("session-3")
+    
+    # Verify they exist
+    assert "session-1" in cascade._sessions
+    assert "session-2" in cascade._sessions
+    assert "session-3" in cascade._sessions
+    
+    # Touch session-1 to update last_accessed timestamp (making session-2 oldest)
+    # To ensure time difference, we can sleep briefly or modify timestamps directly, 
+    # but a simple sleep is quick, or we can manually set timestamps to be deterministic:
+    cascade._sessions["session-1"].last_accessed = time.time() + 10.0
+    cascade._sessions["session-2"].last_accessed = time.time() - 10.0
+    cascade._sessions["session-3"].last_accessed = time.time()
+    
+    # Adding session-4 should trigger eviction of session-2 (the oldest)
+    cascade._get("session-4")
+    
+    assert "session-2" not in cascade._sessions
+    assert "session-4" in cascade._sessions
+    assert "session-1" in cascade._sessions
+    assert "session-3" in cascade._sessions
+
+
+def test_session_history_bounded():
+    from src.session.cascade import CascadeBouncer
+    from collections import deque
+    
+    mock_engine = MagicMock()
+    mock_engine.classify.return_value = {
+        "verdict": "SAFE",
+        "is_adversarial": False,
+        "ensemble_score": 0.1,
+        "signals": [],
+        "top_family": ""
+    }
+    
+    # 1. Initialize cascade with max_turns=5
+    cascade = CascadeBouncer(engine=mock_engine, max_turns=5)
+    assert cascade.max_turns == 5
+    
+    # Retrieve a mock session state
+    state = cascade._get("test-session")
+    assert state.max_turns == 5
+    assert isinstance(state.turns, deque)
+    assert isinstance(state.turn_scores, deque)
+    assert isinstance(state.window_scores, deque)
+    
+    # Assert they all share maxlen = 5
+    assert state.turns.maxlen == 5
+    assert state.turn_scores.maxlen == 5
+    assert state.window_scores.maxlen == 5
+    
+    # 2. Check bounds: score 6 turns and verify that deques cap out at 5 elements
+    for i in range(6):
+        cascade.score_turn("test-session", f"prompt-{i}", role="user")
+        
+    # Verify turns cap at 5 (first prompt "prompt-0" should have been popped)
+    assert len(state.turns) == 5
+    assert len(state.turn_scores) == 5
+    assert state.turns[0]["content"] == "prompt-1"
+    assert state.turns[-1]["content"] == "prompt-5"
+
+
 
 
