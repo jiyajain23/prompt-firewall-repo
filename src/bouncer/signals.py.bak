@@ -24,11 +24,6 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 
-MAX_B64_CHUNKS = 8
-MAX_B64_CHARS = 4096
-MAX_DECODED_BYTES = 8192
-
-
 HARD_BLACKLIST: List[str] = [
     r"ignore (all )?(previous|prior) instructions",
     r"\bignore\s+(all\s+)?(previous\s+)?(instructions?|rules|constraints)\b",
@@ -150,37 +145,14 @@ def has_affirmative_signal(text: str) -> bool:
 
 def _decoded_base64_text(prompt: str) -> str:
     decoded = []
-
-    for chunk in re.findall(
-        r"[A-Za-z0-9+/]{16,}",
-        prompt
-    )[:MAX_B64_CHUNKS]:
-
-        if len(chunk) > MAX_B64_CHARS:
-            continue
-
+    for chunk in re.findall(r"[A-Za-z0-9+/]{16,}", prompt):
         padding = (4 - len(chunk) % 4) % 4
-
         try:
-            decoded_bytes = base64.b64decode(
-                chunk + "=" * padding,
-                validate=True,
-            )
-
-            if len(decoded_bytes) > MAX_DECODED_BYTES:
-                continue
-
-            decoded.append(
-                decoded_bytes.decode(
-                    "utf-8",
-                    errors="ignore",
-                )
-            )
-
+            decoded.append(base64.b64decode(chunk + "=" * padding).decode("utf-8", errors="ignore"))
         except Exception:
-            continue
-
+            pass
     return " ".join(decoded)
+
 
 def signal_hard_block(prompt: str) -> Tuple[bool, str]:
     """Return (hit, reason). Base64 chunks are decoded before scanning."""

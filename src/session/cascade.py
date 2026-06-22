@@ -26,15 +26,29 @@ from ..bouncer.windows import conversation_to_windows
 
 @dataclass
 class CascadeSessionState:
-    session_id:      str
-    turns:           deque  = field(default_factory=lambda: deque(maxlen=20))
-    turn_scores:     List[float] = field(default_factory=list)
-    window_scores:   List[float] = field(default_factory=list)
-    flagged_turns:   int = 0
-    flagged_windows: int = 0
-    total_turns:     int = 0
-    stage2_calls:    int = 0
-    last_accessed:   float = field(default_factory=time.time)
+    session_id:       str
+
+    created_at:       float       = field(default_factory=time.time)
+    last_seen:        float       = field(default_factory=time.time)
+
+    max_turns:        int         = 20
+    turns:            deque       = field(init=False)
+    turn_scores:      deque       = field(init=False)
+    window_scores:    deque       = field(init=False)
+
+    flagged_turns:    int         = 0
+    flagged_windows:  int         = 0
+    total_turns:      int         = 0
+    stage2_calls:     int         = 0
+
+    flagged_turn_log: deque       = field(init=False)
+    last_accessed:    float       = field(default_factory=time.time)
+
+    def __post_init__(self):
+        self.turns = deque(maxlen=self.max_turns)
+        self.turn_scores = deque(maxlen=self.max_turns)
+        self.window_scores = deque(maxlen=self.max_turns)
+        self.flagged_turn_log = deque(maxlen=self.max_turns)
 
 
 class CascadeBouncer:
@@ -45,21 +59,49 @@ class CascadeBouncer:
 
     def __init__(
         self,
-        engine,                     # BouncerEngine instance
-        certain_high: float = 0.82,
-        certain_low:  float = 0.12,
-        window_size:  int   = 3,
-        window_stride: int  = 1,
-        window_max_chars: int = 512,
-        ens_threshold: float = 0.50,
+        engine,                           # BouncerEngine instance
+        certain_high:          float = 0.82,
+        certain_low:           float = 0.12,
+        window_size:           int   = 3,
+        window_stride:         int   = 1,
+        window_max_chars:      int   = 512,
+        ens_threshold:         float = 0.50,
+
+        escalation_window:     int   = 5,
+        escalation_threshold:  float = 0.25,
+        escalation_peak_floor: float = 0.75,
+        escalation_boost:      float = 0.25,
+
+        persistence_min_hits:  int   = 2,
+        persistence_window:    int   = 6,
+        persistence_boost:     float = 0.15,
+
+        max_turns:             int   = 20,
+
+        ttl_seconds:           int   = 3600,
+        max_sessions:          int   = 10000,
     ):
-        self.engine           = engine
-        self.certain_high     = certain_high
-        self.certain_low      = certain_low
-        self.window_size      = window_size
-        self.window_stride    = window_stride
-        self.window_max_chars = window_max_chars
-        self.ens_threshold    = ens_threshold
+        self.engine                = engine
+        self.certain_high          = certain_high
+        self.certain_low           = certain_low
+        self.window_size           = window_size
+        self.window_stride         = window_stride
+        self.window_max_chars      = window_max_chars
+        self.ens_threshold         = ens_threshold
+
+        self.escalation_window     = escalation_window
+        self.escalation_threshold  = escalation_threshold
+        self.escalation_peak_floor = escalation_peak_floor
+        self.escalation_boost      = escalation_boost
+
+        self.persistence_min_hits  = persistence_min_hits
+        self.persistence_window    = persistence_window
+        self.persistence_boost     = persistence_boost
+
+        self.max_turns             = max_turns
+
+        self.ttl_seconds           = ttl_seconds
+        self.max_sessions          = max_sessions
         self._sessions: Dict[str, CascadeSessionState] = {}
         self.max_sessions     = 5000
 
@@ -67,23 +109,49 @@ class CascadeBouncer:
 
     def _get(self, session_id: str) -> CascadeSessionState:
         now = time.time()
-        # 1. Prune expired sessions (older than 1 hour) to free memory
-        expired = [sid for sid, s in self._sessions.items() if now - s.last_accessed > 3600]
+
+        # Prune expired sessions using configurable TTL
+        expired = [
+            sid
+            for sid, s in self._sessions.items()
+            if now - s.last_accessed > self.ttl_seconds
+        ]
+
         for sid in expired:
             self._sessions.pop(sid, None)
 
         if session_id not in self._sessions:
-            # 2. Limit maximum active sessions to prevent Memory DoS (evict oldest LRU)
+
+            # Limit active sessions using configurable max_sessions
             if len(self._sessions) >= self.max_sessions:
-                oldest_sid = min(self._sessions.keys(), key=lambda k: self._sessions[k].last_accessed)
+                oldest_sid = min(
+                    self._sessions.keys(),
+                    key=lambda k: self._sessions[k].last_accessed,
+                )
                 self._sessions.pop(oldest_sid, None)
-            self._sessions[session_id] = CascadeSessionState(session_id=session_id, last_accessed=now)
+            self._sessions[session_id] = CascadeSessionState(
+                session_id=session_id,
+                max_turns=self.max_turns,
+                last_accessed=now,
+            )
         else:
             self._sessions[session_id].last_accessed = now
-        return self._sessions[session_id]
 
+        return self._sessions[session_id]
     def clear(self, session_id: str) -> None:
         self._sessions.pop(session_id, None)
+
+    def _cleanup_sessions(self) -> None:
+        now = time.time()
+
+        expired = [
+            sid
+            for sid, state in self._sessions.items()
+            if now - state.last_seen > self.ttl_seconds
+        ]
+
+        for sid in expired:
+            self._sessions.pop(sid, None)
 
     def summary(self, session_id: str) -> Dict:
         state = self._sessions[session_id]
@@ -92,10 +160,12 @@ class CascadeBouncer:
             "total_turns":    state.total_turns,
             "flagged_turns":  state.flagged_turns,
             "flagged_windows": state.flagged_windows,
-            "stage2_calls":   state.stage2_calls,
-            "stage2_rate":    state.stage2_calls / max(state.total_turns, 1),
-            "avg_risk":       round(np.mean(state.turn_scores), 4) if state.turn_scores else 0.0,
-            "max_risk":       round(max(state.turn_scores), 4)     if state.turn_scores else 0.0,
+
+            "stage2_calls":    state.stage2_calls,
+            "stage2_rate":     state.stage2_calls / max(state.total_turns, 1),
+            "avg_risk":        round(np.mean(state.turn_scores), 4) if state.turn_scores else 0.0,
+            "max_risk":        round(max(state.turn_scores), 4) if state.turn_scores else 0.0,
+
         }
 
     # ── Trajectory helpers ─────────────────────────────────────────────────────

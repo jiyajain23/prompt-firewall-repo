@@ -5,9 +5,11 @@ services:
     build: .
     ports:
       - "8000:8000"
+    
     environment:
-      - FIREWALL_API_KEY=${FIREWALL_API_KEY}
-      - HF_REPO_ID=${HF_REPO_ID}
+      - FIREWALL_API_KEY=${FIREWALL_API_KEY:?FIREWALL_API_KEY is required}
+      - HF_REPO_ID=${HF_REPO_ID:?HF_REPO_ID is required}
+      - HF_REVISION=${HF_REVISION:?HF_REVISION is required}
       # Set MODEL_DIR to skip HF download and load from a mounted local dir:
       # - MODEL_DIR=/models
       - FIREWALL_CONFIG=configs/model_config.yaml

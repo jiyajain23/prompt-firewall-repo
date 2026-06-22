@@ -85,13 +85,28 @@ async def lifespan(app: FastAPI):
 
         cascade = CascadeBouncer(
             engine,
-            certain_high      = cfg["session"]["cascade_certain_high"],
-            certain_low       = cfg["session"]["cascade_certain_low"],
-            window_size       = cfg["session"]["window_size"],
-            window_stride     = cfg["session"]["window_stride"],
-            window_max_chars  = cfg["session"]["window_max_chars"],
-            ens_threshold     = cfg["ensemble"]["threshold"],
+            certain_high          = cfg["session"]["cascade_certain_high"],
+            certain_low           = cfg["session"]["cascade_certain_low"],
+            window_size           = cfg["session"]["window_size"],
+            window_stride         = cfg["session"]["window_stride"],
+            window_max_chars      = cfg["session"]["window_max_chars"],
+            ens_threshold         = cfg["ensemble"]["threshold"],
+
+            escalation_window     = cfg["session"]["escalation_window"],
+            escalation_threshold  = cfg["session"]["escalation_threshold"],
+            escalation_peak_floor = cfg["session"]["escalation_peak_floor"],
+            escalation_boost      = cfg["session"]["escalation_boost"],
+
+            persistence_min_hits  = cfg["session"]["persistence_min_hits"],
+            persistence_window    = cfg["session"]["persistence_window"],
+            persistence_boost     = cfg["session"]["persistence_boost"],
+
+            max_turns             = cfg["session"].get("max_turns", 20),
+
+            ttl_seconds           = cfg["session"]["ttl_seconds"],
+            max_sessions          = cfg["session"]["max_sessions"],
         )
+
         app.state.engine = engine
         app.state.cascade = cascade
 
