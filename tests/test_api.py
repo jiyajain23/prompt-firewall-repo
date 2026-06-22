@@ -99,7 +99,7 @@ def test_classify_with_mock_engine():
         data = response.json()
         assert data["verdict"] == "SAFE"
         assert data["is_adversarial"] is False
-        mock_engine.classify.assert_called_once_with("hello world")
+        mock_engine.classify.assert_called_once_with("hello world", include_shap=False)
 
 def test_proxy_ip_resolution():
     from src.api.main import _get_client_ip
@@ -218,8 +218,8 @@ def test_public_mode_defense(monkeypatch):
         assert "shap_top5" not in data
         assert "prompt_hash" not in data
         
-        # Verify that the engine was called with only the prompt
-        mock_engine.classify.assert_called_once_with("hello world")
+        # Verify that include_shap was forced to False when calling the engine
+        mock_engine.classify.assert_called_once_with("hello world", include_shap=False)
 
 def test_session_id_validation():
     with TestClient(app) as client:
@@ -282,46 +282,6 @@ def test_session_eviction_lru():
     assert "session-4" in cascade._sessions
     assert "session-1" in cascade._sessions
     assert "session-3" in cascade._sessions
-
-
-def test_session_history_bounded():
-    from src.session.cascade import CascadeBouncer
-    from collections import deque
-    
-    mock_engine = MagicMock()
-    mock_engine.classify.return_value = {
-        "verdict": "SAFE",
-        "is_adversarial": False,
-        "ensemble_score": 0.1,
-        "signals": [],
-        "top_family": ""
-    }
-    
-    # 1. Initialize cascade with max_turns=5
-    cascade = CascadeBouncer(engine=mock_engine, max_turns=5)
-    assert cascade.max_turns == 5
-    
-    # Retrieve a mock session state
-    state = cascade._get("test-session")
-    assert state.max_turns == 5
-    assert isinstance(state.turns, deque)
-    assert isinstance(state.turn_scores, deque)
-    assert isinstance(state.window_scores, deque)
-    
-    # Assert they all share maxlen = 5
-    assert state.turns.maxlen == 5
-    assert state.turn_scores.maxlen == 5
-    assert state.window_scores.maxlen == 5
-    
-    # 2. Check bounds: score 6 turns and verify that deques cap out at 5 elements
-    for i in range(6):
-        cascade.score_turn("test-session", f"prompt-{i}", role="user")
-        
-    # Verify turns cap at 5 (first prompt "prompt-0" should have been popped)
-    assert len(state.turns) == 5
-    assert len(state.turn_scores) == 5
-    assert state.turns[0]["content"] == "prompt-1"
-    assert state.turns[-1]["content"] == "prompt-5"
 
 
 

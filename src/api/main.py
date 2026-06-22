@@ -83,9 +83,6 @@ async def lifespan(app: FastAPI):
             hf_repo = os.environ.get("HF_REPO_ID", cfg["model"]["hf_repo_id"])
             engine = BouncerEngine.from_hf(hf_repo, cfg)
 
-        # BUG-6 FIX: propagate context_window_turns from config into engine.
-        engine.context_window_turns = cfg["session"].get("context_window_turns", 5)
-
         cascade = CascadeBouncer(
             engine,
             certain_high          = cfg["session"]["cascade_certain_high"],
@@ -137,6 +134,7 @@ async def lifespan(app: FastAPI):
         app.state.redis_client.close()
 
 
+# ── App ────────────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Prompt Firewall",
     description="Adversarial prompt detection — XGBoost + DeBERTa ensemble",
@@ -237,7 +235,11 @@ async def classify(
         raise HTTPException(status_code=503, detail="Model engine not initialized")
 
     public_mode = getattr(request.app.state, "public_mode", False)
-    result     = engine.classify(req.prompt)
+    include_shap = req.include_shap
+    if public_mode:
+        include_shap = False
+
+    result     = engine.classify(req.prompt, include_shap=include_shap)
     request_id = str(uuid.uuid4())
     logger.log(request_id, result)
 
@@ -340,20 +342,7 @@ async def health(request: Request):
 
 @app.exception_handler(Exception)
 async def _global_error(request: Request, exc: Exception):
-    request_id = str(uuid.uuid4())
-
-    logger.log(
-        request_id,
-        {
-            "error": str(exc),
-            "error_type": type(exc).__name__,
-        },
-    )
-
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": "Internal server error",
-            "request_id": request_id,
-        },
+        content={"detail": str(exc), "type": type(exc).__name__},
     )

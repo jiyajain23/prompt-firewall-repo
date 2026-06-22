@@ -19,7 +19,7 @@ class AuditLogger:
 
     def log(self, request_id: str, result: Dict) -> None:
         entry = {
-            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "ts":           datetime.datetime.utcnow().isoformat(),
             "request_id":   request_id,
             "prompt_hash":  result.get("prompt_hash", ""),
             "verdict":      result.get("verdict", ""),
@@ -34,5 +34,5 @@ class AuditLogger:
             "session_id":   result.get("session_id"),    # session only
         }
         log_file = self.log_dir / f"{datetime.date.today()}.jsonl"
-        with open(log_file, "a", encoding="utf-8") as f:
+        with open(log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
