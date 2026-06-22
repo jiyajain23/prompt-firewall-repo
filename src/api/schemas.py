@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 
 class ClassifyRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=32_000)
+    # include_shap is deprecated and unused since the SHAP explainer has been dropped from the engine.
     include_shap: bool = False
 
 
@@ -17,9 +18,7 @@ class SessionClassifyRequest(BaseModel):
     role: str = Field(default="user")
 
 
-class ShapFeature(BaseModel):
-    feature: str
-    shap: float
+# ShapFeature removed — TAXONOMY/SHAP machinery dropped from the engine.
 
 
 class FaissResult(BaseModel):
@@ -35,33 +34,44 @@ class ClassifyResponse(BaseModel):
     verdict: str
     is_adversarial: bool
     ensemble_score: float
+    raw_ensemble_score: float = 0.0
     xgb_score: float
     transformer_score: float
-    faiss: FaissResult
-    top_families: List[Tuple[str, float]]
+    transformer_status: str = ""
+    faiss_result: Optional[FaissResult] = None
+    # Legacy field — kept until callers stop reading ["faiss"].
+    faiss: Optional[FaissResult] = None
+    # TAXONOMY REMOVED: top_family is a stub ("UNCLASSIFIED" or "").
+    top_family: str = ""
     signals: List[str]
-    shap_top5: List[ShapFeature]
     latency_ms: float
     prompt_hash: str
     request_id: Optional[str] = None
 
 
 class SessionClassifyResponse(BaseModel):
+    # ── Non-default fields ──
     session_id: str
     turn: int
+    # BUG-5 FIX: plain ASCII — no emoji that corrupt non-UTF-8 log viewers.
     verdict: str
     is_adversarial: bool
     final_score: float
     single_score: float
     traj_score: float
-    window_score: Optional[float]
     stage: str
     stage2_calls: int
     flagged_turns: int
     flagged_windows: int
     signals: List[str]
-    top_families: List[Tuple[str, float]]
     latency_ms: float
+    
+    window_score: Optional[float] = None
+    escalation: bool = False
+    escalation_reason: Optional[str] = None
+    persistence: bool = False
+    flags_in_window: int = 0
+    top_family: str = ""
     request_id: Optional[str] = None
 
 

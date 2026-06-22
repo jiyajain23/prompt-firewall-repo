@@ -9,7 +9,7 @@ model:
   transformer_model: "microsoft/deberta-v3-base"
   transformer_max_len: 256
   hf_revision: null            # Pinned Git commit SHA / revision for HuggingFace downloads (null = use latest)
-
+  artifacts_manifest: "manifest.json"
 artifacts:
   xgb_model: "xgb_model.json"
   scaler: "scaler.pkl"
@@ -17,18 +17,21 @@ artifacts:
   ensemble_config: "ensemble_config.pkl"
   faiss_index: "zeroday.faiss"
   faiss_meta: "zeroday_meta.pkl"
-  shap_explainer: "shap_explainer.pkl"
-  taxonomy_clf: "taxonomy_clf.pkl"
-  taxonomy_le: "taxonomy_le.pkl"
+  # TAXONOMY REMOVED: shap_explainer, taxonomy_clf, taxonomy_le no longer loaded.
 
 ensemble:
-  w_xgb: 0.40
-  w_transformer: 0.60
-  w_faiss: 0.20
-  threshold: 0.50              # calibrated on val set
+  # Recalibrated weights from evaluation cell (BUG-3 FIX: normalized formula).
+  # W_XGB + W_TRANSFORMER need not sum to 1.0 — normalized inside engine.
+  # W_FAISS_DELTA is additive, not a weight.
+  w_xgb: 0.05
+  w_transformer: 0.95
+  # BUG-1b FIX: additive delta on top of the normalized base score.
+  w_faiss_delta: 0.10
+  threshold: 0.915             # calibrated on val set (locked-in)
+  target_fpr: 0.015            # design constraint documented here
   xgb_threshold: 0.79          # calibrated XGB-only threshold
-  xgb_fast_high: 0.92          # skip transformer above this
-  xgb_fast_low: 0.08           # skip transformer below this
+  xgb_fast_high: 0.97          # skip transformer above this (was 0.92)
+  xgb_fast_low: 0.03           # skip transformer below this (was 0.08)
 
 faiss:
   sim_threshold: 0.82          # hard match
@@ -41,14 +44,22 @@ features:
 
 session:
   max_turns: 20
+  context_window_turns: 5      # BUG-6 FIX: recent turns fed to ML models
   window_size: 3
   window_stride: 1
   window_max_chars: 512
   escalation_window: 5
   escalation_threshold: 0.25
+  escalation_boost: 0.25          
   persistence_min_hits: 2
-  cascade_certain_high: 0.82
-  cascade_certain_low: 0.12
+  persistence_window: 6           
+  persistence_boost: 0.15         
+  escalation_peak_floor: 0.75
+  cascade_certain_high: 0.92
+  cascade_certain_low: 0.05    
+
+  ttl_seconds: 3600
+  max_sessions: 10000
 
 api:
   host: "0.0.0.0"
@@ -59,3 +70,5 @@ api:
   require_api_key: false       # Force authentication failure if FIREWALL_API_KEY is empty in prod
   redis_url: ""                # Redis connection URL for distributed rate limiting (empty = fallback to in-memory)
   cors_origins: "*"            # Allowed CORS origins, comma-separated (overridden by CORS_ORIGINS env var)
+  log_dir: "/app/logs"
+  public_health_details: false
