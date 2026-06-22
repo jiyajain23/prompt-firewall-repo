@@ -41,15 +41,26 @@ features:
 
 session:
   max_turns: 20
+
   window_size: 3
   window_stride: 1
   window_max_chars: 512
+
   escalation_window: 5
   escalation_threshold: 0.25
+  escalation_peak_floor: 0.75
+  escalation_boost: 0.25
+
   persistence_min_hits: 2
+  persistence_window: 6
+  persistence_boost: 0.15
+
+  ttl_seconds: 3600
+  max_sessions: 10000
+
   cascade_certain_high: 0.82
   cascade_certain_low: 0.12
-
+  
 api:
   host: "0.0.0.0"
   port: 8000
